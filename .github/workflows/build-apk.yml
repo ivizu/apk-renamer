@@ -60,6 +60,26 @@ jobs:
           find "$JAR_DIR" -maxdepth 1 -type f -name '*.jar' -exec cp {} "$GITHUB_WORKSPACE/app/libs/apktool/runtime/" \;
           test "$(find "$GITHUB_WORKSPACE/app/libs/apktool/runtime" -name '*.jar' | wc -l)" -gt 0
 
+      - name: Apply compilation fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/build.gradle.kts")
+          s = p.read_text(encoding="utf-8")
+          marker = "    buildFeatures {"
+          assert s.count(marker) == 1, "Unexpected Android Gradle configuration"
+          s = s.replace(marker, "    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n\n" + marker, 1)
+          s += '\nconfigurations.configureEach {\n    exclude(group = "com.google.guava", module = "listenablefuture")\n}\n\nkotlin {\n    jvmToolchain(17)\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n'
+          p.write_text(s, encoding="utf-8")
+          p = Path("app/src/main/java/com/example/apkrenamer/ApkRewriteEngine.kt")
+          s = p.read_text(encoding="utf-8")
+          old = "val updated = rootPackage.replaceFirst(xml) { m ->\n            m.groupValues[1] + newPackage + m.groupValues[2]\n        }"
+          new = "val updated = xml.replaceRange(match.range, match.groupValues[1] + newPackage + match.groupValues[2])"
+          assert s.count(old) == 1, "Unexpected Kotlin source version"
+          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
 
