@@ -2,6 +2,9 @@ name: Build APK Renamer
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build-apk.yml']
 
 permissions:
   contents: read
@@ -99,13 +102,29 @@ jobs:
               assert not p.exists(), f"Unexpected existing file: {path}"
               p.write_text(content, encoding="utf-8")
 
-          replace_one('app/build.gradle.kts', 'versionCode = 2', 'versionCode = 6')
-          replace_one('app/build.gradle.kts', 'versionName = "0.2.0"', 'versionName = "0.6.0"')
+          replace_one('app/build.gradle.kts', 'versionCode = 2', 'versionCode = 7')
+          replace_one('app/build.gradle.kts', 'versionName = "0.2.0"', 'versionName = "0.7.0"')
           replace_one('app/build.gradle.kts', 'dependencies {', 'dependencies {\n    testImplementation("junit:junit:4.13.2")')
           replace_one('settings.gradle.kts', 'include(":app")', 'include(":app", ":sample")')
           replace_one('app/src/main/java/com/example/apkrenamer/MainActivity.kt', 'import androidx.compose.material3.Text\n', 'import androidx.compose.material3.Text\nimport androidx.compose.material3.TextButton\nimport com.example.apkrenamer.diagnostics.ResourceDiagnostics\n')
-          replace_one('app/src/main/java/com/example/apkrenamer/MainActivity.kt', 'V0.3 · 卓易通适配验证版 · 本地离线处理', 'V0.6 · 资源诊断验证版 · 本地离线处理')
+          replace_one('app/src/main/java/com/example/apkrenamer/MainActivity.kt', 'V0.3 · 卓易通适配验证版 · 本地离线处理', 'V0.7 · 资源诊断验证版 · 本地离线处理')
           replace_one('app/src/main/java/com/example/apkrenamer/MainActivity.kt', '                error?.let {\n                    Text(it, color = MaterialTheme.colorScheme.error)\n                }', '                error?.let { log ->\n                    var expanded by remember(log) { mutableStateOf(false) }\n                    Text(ResourceDiagnostics.summary(log), color = MaterialTheme.colorScheme.error)\n                    TextButton(onClick = { expanded = !expanded }) {\n                        Text(if (expanded) "收起原始日志" else "查看完整原始日志")\n                    }\n                    if (expanded) Text(log, style = MaterialTheme.typography.bodySmall)\n                    TextButton(onClick = {\n                        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)\n                        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("APK Renamer diagnostics", log))\n                    }) { Text("复制原始日志") }\n                }')
+          PY
+
+      - name: Improve read-only error classification and regression tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/example/apkrenamer/diagnostics/ResourceDiagnostics.kt")
+          s = p.read_text(encoding="utf-8")
+          old = "            log.contains(\"failed linking file resources\", true) || log.contains(\"failed linking references\", true) -> Stage.RESOURCE_LINK"
+          new = "            log.contains(\"failed linking file resources\", true) || log.contains(\"failed linking references\", true) -> Stage.RESOURCE_LINK\n            log.contains(\"aapt2\", true) && !log.contains(\"cannot run program\", true) && !log.contains(\"permission denied\", true) &&\n                (Regex(\"\"\"(?:,\\s*link\\s*,|\\baapt2(?:\\.so)?\\s+link\\b)\"\"\", RegexOption.IGNORE_CASE).containsMatchIn(log)) &&\n                findings.isNotEmpty() -> Stage.RESOURCE_LINK"
+          assert s.count(old) == 1, "Unexpected diagnostics source"
+          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+          t = Path("app/src/test/java/com/example/apkrenamer/diagnostics/IncompleteResourceLogTest.kt")
+          assert not t.exists(), "Unexpected existing test file"
+          t.write_text("package com.example.apkrenamer.diagnostics\n\nimport org.junit.Assert.assertEquals\nimport org.junit.Test\n\nclass IncompleteResourceLogTest {\n    @Test fun linkingErrorWithoutFinalSummary() {\n        val log = \"Execution failed: [/tmp/libaapt2.so, link, -o, sample.apk]\\nstderr:\\n/tmp/demo/res/layout/sample.xml:3: error: invalid sample attribute\"\n        val report = ResourceDiagnostics.parseLog(log)\n        assertEquals(ResourceDiagnostics.Stage.RESOURCE_LINK, report.stage)\n        assertEquals(\"res/layout/sample.xml\", report.findings.single().path)\n        assertEquals(3, report.findings.single().line)\n    }\n\n    @Test fun commandLineWithMissingResourceSummary() {\n        val log = \"aapt2 link -o sample.apk\\nres/layout/sample.xml:9: error: invalid sample value\"\n        assertEquals(ResourceDiagnostics.Stage.RESOURCE_LINK, ResourceDiagnostics.parseLog(log).stage)\n    }\n\n    @Test fun unrelatedLinkTextRemainsUnknown() {\n        val log = \"Application link validation\\nres/layout/sample.xml:2: error: sample\"\n        assertEquals(ResourceDiagnostics.Stage.UNKNOWN, ResourceDiagnostics.parseLog(log).stage)\n    }\n\n    @Test fun executionFailureIsNotAResourceLinkFailure() {\n        val log = \"Cannot run program aapt2 link: Permission denied\\nres/layout/sample.xml:2: error: sample\"\n        assertEquals(ResourceDiagnostics.Stage.ENGINE_EXECUTION, ResourceDiagnostics.parseLog(log).stage)\n    }\n}\n", encoding="utf-8")
           PY
 
       - name: Run diagnostics unit tests
@@ -117,7 +136,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: APK-Renamer-V0.6-debug
+          name: APK-Renamer-V0.7-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
